@@ -3,36 +3,11 @@ import ciscoconfparse as c
 import re
 import ipaddress
 import itertools
+import sys
 
+sys.path.insert(0, 'utils')
+from get_site_data import get_site_configs, SITES_CONFIG_FOLDER, exists
 
-######################################################
-################# VARIABLES/CONSTANT #################
-######################################################
-
-SWITCH = 'BOOSW016'
-
-SHEET = SWITCH
-
-VLAN_FROM_XLS = True  # IF TRUE THEN XLS IS TRUSTABLE AS TRUSTED VLAN' SOURCE
-
-BASE = '/mnt/hgfs/VM_shared/VF-2017/NMP/'
-SITE = 'BO01-test/'
-BASE_DIR = BASE + SITE + SWITCH + '/Stage_3/'
-
-INPUT_XLS = BASE_DIR + SWITCH + '_OUT_DB_OPT.xlsx'
-OSW_CFG_TXT = BASE_DIR + SWITCH + '.txt'
-OSWVCE_CFG_TXT = BASE_DIR + SWITCH + 'VCE' + '.txt'
-OSWVSW_CFG_TXT = BASE_DIR + SWITCH + 'VSW' + '.txt'
-
-OTHER_SWITCH = 'BOOSW013'
-
-
-OTHER_BASE_DIR = BASE + SITE + OTHER_SWITCH + '/Stage_3/'
-OTHER_INPUT_XLS = OTHER_BASE_DIR + OTHER_SWITCH + '_OUT_DB_OPT.xlsx'
-OTHER_SHEET = OTHER_SWITCH
-
-PO_OSW_OSW = r'^interface Port-channel1$'
-PO_OSW_VPE = r'^interface Port-channel116$'
 
 qos_sp_def_N9508_dict = {
     'U': ' service-policy type qos input UNTRUST',
@@ -131,11 +106,11 @@ def get_col_N9508(ws, col):
             if (ws.cell(row=r, column=NEXUS_AP_COL).value != 'N3048' and ws.cell(row=r, column=NEXUS_AP_COL).value != 'Infra')]
 
 
-def get_if_from_xls():
+def get_if_from_xls(INPUT_XLS, SHEET):
     ''' Return column col as list '''
 
     wb_r = load_workbook(INPUT_XLS)
-    ws_r = wb_r.get_sheet_by_name(SHEET)
+    ws_r = wb_r[SHEET]
     SRC_IF_COL = 1
     if_N3048 = get_col_N3048(ws_r, SRC_IF_COL)
     if_N9508 = get_col_N9508(ws_r, SRC_IF_COL)
@@ -144,7 +119,7 @@ def get_if_from_xls():
     return (if_N9508, if_N3048)
 
 
-def get_if_from_cfg():
+def get_if_from_cfg(OSW_CFG_TXT):
     ''' from cfg get list of all *Ethernet interface '''
 
     parse = c.CiscoConfParse(OSW_CFG_TXT)
@@ -155,7 +130,7 @@ def get_if_from_cfg():
     return a
 
 
-def get_vlan_from_cfg():
+def get_vlan_from_cfg(OSW_CFG_TXT):
     ''' from cfg get list of all L2 vlan  '''
 
     parse = c.CiscoConfParse(OSW_CFG_TXT)
@@ -164,11 +139,11 @@ def get_vlan_from_cfg():
     return [obj.text.split(' ')[1] for obj in vlan_obj_list]
 
 
-def get_vlan_from_xls():
+def get_vlan_from_xls(INPUT_XLS, SHEET):
     ''' from xls get list of all L2 vlan  '''
 
     wb_r = load_workbook(INPUT_XLS)
-    ws_r = wb_r.get_sheet_by_name(SHEET)
+    ws_r = wb_r[SHEET]
     VLAN_COL = 4
 
     lst_N9508 = get_col_for_vlan_N9508(ws_r, VLAN_COL)
@@ -180,7 +155,7 @@ def get_vlan_from_xls():
     return (lst_N9K, lst_N3K)
 
 
-def get_vlan_other_sw_from_xls():
+def get_vlan_other_sw_from_xls(OTHER_INPUT_XLS, OTHER_SHEET):
     ''' from xls get list of all L2 vlan  '''
 
     a = set()
@@ -211,7 +186,7 @@ def get_vlan_other_sw_from_xls():
     return lst2
 
 
-def get_svi_from_cfg():
+def get_svi_from_cfg(OSW_CFG_TXT):
     ''' from cfg get list of all svi interfaces  '''
 
     parse = c.CiscoConfParse(OSW_CFG_TXT)
@@ -244,11 +219,11 @@ def get_list_not_to_be_migrated(ifxls, ifcfg):
         return []
 
 
-def get_migration_dictionary_N3048():
+def get_migration_dictionary_N3048(INPUT_XLS, SHEET):
     ''' return {SRC_IF:DEST_IF} for N3048  '''
 
     wb_r = load_workbook(INPUT_XLS)
-    ws_r = wb_r.get_sheet_by_name(SHEET)
+    ws_r = wb_r[SHEET]
 
     NEXUS_AP_COL = 6
     SRC_IF_COL = 1
@@ -257,11 +232,11 @@ def get_migration_dictionary_N3048():
             for r in range(2, ws_r.max_row + 1) if ws_r.cell(row=r, column=NEXUS_AP_COL).value == 'N3048'}
 
 
-def get_migration_dictionary_N9508():
+def get_migration_dictionary_N9508(INPUT_XLS, SHEET):
     ''' return {SRC_IF:DEST_IF} for N9508  '''
 
     wb_r = load_workbook(INPUT_XLS)
-    ws_r = wb_r.get_sheet_by_name(SHEET)
+    ws_r = wb_r[SHEET]
 
     NEXUS_AP_COL = 6
     SRC_IF_COL = 1
@@ -270,12 +245,12 @@ def get_migration_dictionary_N9508():
             for r in range(2, ws_r.max_row + 1) if (ws_r.cell(row=r, column=NEXUS_AP_COL).value != 'N3048' and ws_r.cell(row=r, column=NEXUS_AP_COL).value != 'Infra')}
 
 
-def get_normalized_if_OSWVCEVSW_cfg(if_ntbm, mig_dict, qos_sp_def_dict):
+def get_normalized_if_OSWVCEVSW_cfg(device, if_ntbm, mig_dict, qos_sp_def_dict, OSW_CFG_TXT,INPUT_XLS, SHEET):
     ''' return cfg as list of migrated and cleaned - fz clean_if_cfg - interfaces  '''
 
-    intf_gr = get_if_xls_guardroot()
+    intf_gr = get_if_xls_guardroot(INPUT_XLS, SHEET)
 
-    intf_qos_dict = get_if_to_qos_xls_dict()
+    intf_qos_dict = get_if_to_qos_xls_dict(device, INPUT_XLS, SHEET)
     parse = c.CiscoConfParse(OSW_CFG_TXT)
 
     intf_obj_list = parse.find_objects(r'^interface .*Ethernet')
@@ -299,11 +274,11 @@ def get_normalized_if_OSWVCEVSW_cfg(if_ntbm, mig_dict, qos_sp_def_dict):
     cf_intf_1 = list(itertools.chain.from_iterable(cf_intf_list))
     cf_intf_2 = clean_if_cfg(cf_intf_1)
     cf_intf_3 = add_nonegotiationauto(cf_intf_2)
-    cf_intf = add_shutdown(cf_intf_3)
+    cf_intf = add_shutdown(cf_intf_3, OSW_CFG_TXT)
     return cf_intf
 
 
-def get_normalized_vlan_OSWVCEVSW_cfg(vlan_ntbm):
+def get_normalized_vlan_OSWVCEVSW_cfg(vlan_ntbm, OSW_CFG_TXT):
     ''' return cfg as list of vlans  '''
 
     parse = c.CiscoConfParse(OSW_CFG_TXT)
@@ -324,7 +299,7 @@ def get_normalized_vlan_OSWVCEVSW_cfg(vlan_ntbm):
 #def get_normalized_svi_OSWVCEVSW_cfg(svi_ntbm, svi_on_device):
 
 
-def get_normalized_svi_OSWVCEVSW_cfg(svi_ntbm):
+def get_normalized_svi_OSWVCEVSW_cfg(svi_ntbm, OSW_CFG_TXT):
     ''' return cfg as list of svi  '''
 
     parse = c.CiscoConfParse(OSW_CFG_TXT)
@@ -342,7 +317,7 @@ def get_normalized_svi_OSWVCEVSW_cfg(svi_ntbm):
     cf_svi_1 = list(itertools.chain.from_iterable(cf_svi_list))
     #cf_svi_2 = clean_hsrp_to_svi(svi_on_device, cf_svi_1)
     cf_svi_2 = clean_hsrp_to_svi(cf_svi_1)
-    cf_svi = add_shutdown(cf_svi_2)
+    cf_svi = add_shutdown(cf_svi_2, OSW_CFG_TXT)
     return cf_svi
 
 
@@ -454,7 +429,7 @@ def clean_hsrp_to_svi(cfg):
 #     return config_svi_to_add
 
 
-def add_shutdown(cfg):
+def add_shutdown(cfg, OSW_CFG_TXT):
     ''' add  shutdown after 'interface' to list 'cfg'  '''
 
     new_cfg = []
@@ -467,7 +442,7 @@ def add_shutdown(cfg):
     return new_cfg
 
 
-def get_cleaned_routes():  # return a list of cleaned (with egress interfaces) routes
+def get_cleaned_routes(OSW_CFG_TXT):  # return a list of cleaned (with egress interfaces) routes
     ''' return a list with all OSW routes with the right egress interface  '''
 
     new_route_list = ['!', 'vrf context OPNET']
@@ -489,8 +464,7 @@ def get_cleaned_routes():  # return a list of cleaned (with egress interfaces) r
                     for elem in l3_obj.ioscfg:
                         if elem[:11] == ' ip address':
                             help_list = elem.split()
-                            ip_network = ipaddress.IPv4Network(
-                                help_list[2] + '/' + help_list[3], strict=False)
+                            ip_network = ipaddress.IPv4Network(help_list[2] + '/' + help_list[3], strict=False)
                             if ip_nh in ip_network:
                                 nh_ifs = l3_obj.text[10:]
                                 route_l.insert(route_l.index(nh), nh_ifs)
@@ -532,7 +506,7 @@ def get_routes_for_devices(static_routes, real_svi_on_device):
     return real_routes_on_device + ['!']
 
 
-def get_net_in_area():
+def get_net_in_area(OSW_CFG_TXT):
     ''' return a dict of kind: { area: [ipaddress('prefix/lenght'),] } '''
 
     dict_net_in_area = dict()  # { area: [ipaddress('prefix/lenght'),] }
@@ -562,7 +536,7 @@ def get_net_in_area():
     return dict_net_in_area
 
 
-def get_svi_to_area(d_net_in_area):
+def get_svi_to_area(d_net_in_area, OSW_CFG_TXT):
     ''' take { area: [ipaddress('prefix/lenght'),] } and returns a dict of kind: { SVI : area } '''
 
     dict_svi_to_area = dict()  # { SVI : area }
@@ -628,11 +602,11 @@ def add_ospf_to_svi_cfg(svi_conf_list, svi_on_device, d_svi_to_area):
     return svi_with_ospf_conf
 
 
-def get_if_xls_guardroot():
+def get_if_xls_guardroot(INPUT_XLS, SHEET):
     ''' Return intf list if root_guard == 'Yes' '''
 
     wb_r = load_workbook(INPUT_XLS)
-    ws_r = wb_r.get_sheet_by_name(SHEET)
+    ws_r = wb_r[SHEET]
     DST_VCE_IF_COL = 2
     ROOT_GUARD_COL = 13
 
@@ -642,18 +616,21 @@ def get_if_xls_guardroot():
     return if_gr
 
 
-def get_if_to_qos_xls_dict():
+def get_if_to_qos_xls_dict(device, INPUT_XLS, SHEET):
     ''' Return {intf : QoS} dict '''
 
     wb_r = load_workbook(INPUT_XLS)
-    ws_r = wb_r.get_sheet_by_name(SHEET)
+    ws_r = wb_r[SHEET]
     DST_VCE_IF_COL = 2
     QOS_COL = 5
     NEXUS_AP = 6
-
-    qos_gr = {str(ws_r.cell(row=r, column=DST_VCE_IF_COL).value): str(ws_r.cell(row=r, column=QOS_COL).value)
-              for r in range(2, ws_r.max_row + 1) if str(ws_r.cell(row=r, column=NEXUS_AP).value) != 'Infra'}
-
+    if device == 'N9508':
+        qos_gr = {str(ws_r.cell(row=r, column=DST_VCE_IF_COL).value): str(ws_r.cell(row=r, column=QOS_COL).value)
+                  for r in range(2, ws_r.max_row + 1) if (str(ws_r.cell(row=r, column=NEXUS_AP).value) != 'Infra' and
+                                                          str(ws_r.cell(row=r, column=NEXUS_AP).value) != 'N3048')}
+    elif device == 'N3048':
+        qos_gr = {str(ws_r.cell(row=r, column=DST_VCE_IF_COL).value): str(ws_r.cell(row=r, column=QOS_COL).value)
+                  for r in range(2, ws_r.max_row + 1) if str(ws_r.cell(row=r, column=NEXUS_AP).value) == 'N3048'}
     return qos_gr
 
 
@@ -669,7 +646,7 @@ def from_range_to_list(range_str):
     return mylist
 
 
-def get_vlan_list_from_po(po):
+def get_vlan_list_from_po(po, OSW_CFG_TXT):
 
     po_vlan1 = []
 
@@ -697,7 +674,7 @@ def get_vlan_list_from_po(po):
     return po_vlan
 
 
-def get_vlan_to_add():
+def get_vlan_to_add(PO_OSW_VPE, PO_OSW_OSW):
 
     #list_a = get_vlan_from_xls()
     list_b = get_vlan_list_from_po(PO_OSW_VPE)
@@ -761,125 +738,305 @@ def transform_routes_for_nexus(routes):
 
     return n9k_routes
 
+def read_partial_conf(file_path):
+    with open(file_path, encoding="utf-8") as file:
+        config = file.read()
+        config = config.split("!")
+
+        vlans = {}
+        interfaces = {}
+        for block in config:
+            import os
+            block = os.linesep.join([s for s in block.splitlines() if s])
+            if block.startswith('vlan'):
+                vlans_id = re.search(r'vlan (\d+)', block).group(1)
+                vlans[int(vlans_id)] = block
+            if block.startswith('interface') :
+                int_id = re.search("interface [A-Za-z]+(\d+)\/(\d+)", block)
+                interfaces[int(int_id.group(1) + int_id.group(2))] = block
+
+        return vlans, interfaces
+
+def read_ce_vlan(file_path):
+    with open(file_path, encoding="utf-8") as file:
+        config = file.read()
+        int_pos = config.find('interface')
+        interface_block = config[int_pos:]
+        config = config.split("!")
+
+        vlans = {}
+        acl_block = '!\n'
+        for block in config:
+            import os
+            block = os.linesep.join([s for s in block.splitlines() if s])
+            if block.startswith('vlan'):
+                vlans_id = re.search(r'vlan (\d+)', block).group(1)
+                vlans[int(vlans_id)] = block
+
+            if block.startswith('ip'):
+                acl_block = acl_block + block + '\n!\n'
+
+        return vlans, acl_block, interface_block
+
+def merge_vce(vlan_vsw, final_dir):
+    import os
+
+    for file in os.listdir(final_dir):
+        # the .json file is the site's cfg file, other files could be reside there as note files
+        if 'VCE' in file:
+             ce_vlans, acls, interfaces = read_ce_vlan(final_dir + file)
+
+             for vlan, block in vlan_vsw.items():
+                if vlan not in ce_vlans:
+                   ce_vlans[vlan] = block
+
+             final_config = ''
+             for key in sorted(ce_vlans):
+                final_config = final_config + ce_vlans[key] + '\n!\n'
+
+             final_config = acls + final_config + interfaces
+             with open((final_dir + file), 'w') as f:
+                 f.write("\n".join([ll.rstrip() for ll in final_config.splitlines() if ll.strip()]))
+                 f.close()
+
+def merge_vsw(final_dir):
+    import os
+
+    vsw = []
+    for file in os.listdir(final_dir):
+        # the .json file is the site's cfg file, other files could be reside there as note files
+        if 'VSW' in file:
+            vsw.append(file)
+
+    sw_vlans = {}
+    sw_interfaces = {}
+
+    i = 0
+    for sw in vsw:
+        sw_vlans[i], sw_interfaces[i] = read_partial_conf(final_dir + sw)
+        i = i + 1
+
+    for vlan, block in sw_vlans[0].items():
+        if vlan not in sw_vlans[1]:
+            sw_vlans[1][vlan] = block
+
+    for int, block in sw_interfaces[0].items():
+        if int not in sw_interfaces[1]:
+            sw_interfaces[1][int] = block
+
+    final_config = ''
+    for key in sorted(sw_vlans[1]):
+        final_config = final_config + sw_vlans[1][key] + '\n!\n'
+
+    for key in sorted(sw_interfaces[1]):
+        final_config = final_config + sw_interfaces[1][key] + '\n!\n'
+
+    for sw in vsw:
+        with open((final_dir + sw), 'w') as f:
+            f.write("\n".join([ll.rstrip() for ll in final_config.splitlines() if ll.strip()]))
+            f.close()
+
+    # all the vlan to merge in VCE files
+    return sw_vlans[1]
 
 #############################################
-################### MAIN ####################
+################# CORE ######################
 #############################################
 
-############## ROUTES ###############
+def create_dir(dest_path):
+    import os
+    if not os.path.exists(dest_path):
+        os.makedirs(dest_path)
+
+def copy_file(source_file, dest_file, dest_path):
+    import shutil
+    if not exists(source_file):
+        print("File " + source_file + ".txt is missing. \nPlease create it.")
+        exit(0)
+    create_dir(dest_path)
+    shutil.copy(source_file, dest_file)
+
+def copy_folder(site_configs):
+    for site_config in site_configs:
+        #copying site config
+        source_path = site_config.base_dir + site_config.site + "/DATA_SRC/CFG/"
+        source_file = source_path + site_config.switch + ".txt"
+        dest_path = site_config.base_dir + site_config.site + site_config.switch + "/Stage_3/"
+        dest_file = dest_path + site_config.switch + ".txt"
+        if exists(dest_file):
+            print(dest_file + " already exists.")
+        else:
+            print("Copying " + dest_file)
+            copy_file(source_file, dest_file, dest_path)
+
+        #copying xls config
+        source_path = site_config.base_dir + site_config.site + "/DATA_SRC/XLS/OUTPUT_STAGE_2.0/"
+        source_file = source_path + site_config.switch + "_OUT_DB_OPT.xlsx"
+        dest_path = site_config.base_dir + site_config.site + site_config.switch + "/Stage_3/"
+        dest_file = dest_path + site_config.switch + "_OUT_DB_OPT.xlsx"
+        if exists(dest_file):
+            print(dest_path + " already exists.")
+        else:
+            print("Copying " + dest_file)
+            copy_file(source_file, dest_file, dest_path)
 
 
-routes = get_cleaned_routes()
-for r in routes:
-    print(r)
+def run(site_configs):
+    dest_path = ""
+    for site_config in site_configs:
+        base_dir = site_config.base_dir + site_config.site + site_config.switch + "/Stage_3/"
 
+        INPUT_XLS = base_dir + site_config.switch + '_OUT_DB_OPT.xlsx'
+        OSW_CFG_TXT = base_dir + site_config.switch + '.txt'
 
-########### IF #########
+        SHEET = site_config.sheet
+        SWITCH = site_config.switch
 
-if_xls_N9508, if_xls_N3048 = get_if_from_xls()
-if_cfg = get_if_from_cfg()
+        VLAN_FROM_XLS = True  # IF TRUE THEN XLS IS TRUSTABLE AS TRUSTED VLAN' SOURCE
 
-print("if_xls_N9508 = ", if_xls_N9508)
-print("if_xls_N3048 = ", if_xls_N3048)
-print("if_cfg = ", if_cfg)
+        OSWVCE_CFG_TXT = base_dir + SWITCH + 'VCE' + '.txt'
+        OSWVSW_CFG_TXT = base_dir + SWITCH + 'VSW' + '.txt'
 
-if_not_to_be_migrated_N9508 = get_list_not_to_be_migrated(if_xls_N9508, if_cfg)
-if_not_to_be_migrated_N3048 = get_list_not_to_be_migrated(if_xls_N3048, if_cfg)
-print("if_not_to_be_migrated_N9508 = ", if_not_to_be_migrated_N9508)
-print("if_not_to_be_migrated_N3048 = ", if_not_to_be_migrated_N3048)
+        OTHER_SWITCH = site_config.other_switch
 
-################ VLAN CANDIDATE ##############
+        OTHER_BASE_DIR = base_dir + site_config.site + OTHER_SWITCH + '/Stage_3/'
+        OTHER_INPUT_XLS = base_dir + OTHER_SWITCH + '_OUT_DB_OPT.xlsx'
+        OTHER_SHEET = OTHER_SWITCH
 
+        PO_OSW_OSW = r'^interface Port-channel' + site_config.portch_OSW_OSW + "$"
+        PO_OSW_VPE = r'^interface Port-channel' + site_config.portch_OSW_VPE + "$"
 
-candidate_vlan_xls_N9508, candidate_vlan_xls_N3048 = get_vlan_from_xls()
-candidate_vlan_xls_N9508 = list(set(candidate_vlan_xls_N9508) | set(candidate_vlan_xls_N3048))
-candidate_vlan_xls_N9508.sort(key=natural_keys)
-vlan_cfg = get_vlan_from_cfg()  # all vlan from CFG, even those NTBM
+        #############################################
+        ################### MAIN ####################
+        #############################################
 
-print("candidate_vlan_xls_N9508 = ", candidate_vlan_xls_N9508)
-print("candidate_vlan_xls_N3048 = ", candidate_vlan_xls_N3048)
+        acl = ['!', 'ip access-list MGW_OM', ' 10 permit ']
+        for line in site_config.acl:
+            acl.append(' ' + line)
+        acl.append(' 1000 deny ip any any')
+        acl.append('!')
+        ############## ROUTES ###############
 
+        routes = get_cleaned_routes(OSW_CFG_TXT)
+        for r in routes:
+            print(r)
 
-# IF TRUE THEN XLS IS TRUSTABLE AS TRUSTED VLAN SOURCE; Here we test False case
-if not VLAN_FROM_XLS:
-    vlan_to_add = get_vlan_to_add()
-    candidate_vlan_xls_N9508 += vlan_to_add
-    candidate_vlan_xls_N9508.sort(key=natural_keys)
+        ########### IF #########
 
+        if_xls_N9508, if_xls_N3048 = get_if_from_xls(INPUT_XLS, SHEET)
+        if_cfg = get_if_from_cfg(OSW_CFG_TXT)
 
-candidate_vlan_not_to_be_migrated_N9508 = get_list_not_to_be_migrated(candidate_vlan_xls_N9508, vlan_cfg)
-candidate_vlan_not_to_be_migrated_N3048 = get_list_not_to_be_migrated(candidate_vlan_xls_N3048, vlan_cfg)
-print("candidate_vlan_not_to_be_migrated_N9508 = ", candidate_vlan_not_to_be_migrated_N9508)
-print("candidate_vlan_not_to_be_migrated_N3048 = ", candidate_vlan_not_to_be_migrated_N3048)
+        print("if_xls_N9508 = ", if_xls_N9508)
+        print("if_xls_N3048 = ", if_xls_N3048)
+        print("if_cfg = ", if_cfg)
 
-############## SVI ################
+        if_not_to_be_migrated_N9508 = get_list_not_to_be_migrated(if_xls_N9508, if_cfg)
+        if_not_to_be_migrated_N3048 = get_list_not_to_be_migrated(if_xls_N3048, if_cfg)
+        print("if_not_to_be_migrated_N9508 = ", if_not_to_be_migrated_N9508)
+        print("if_not_to_be_migrated_N3048 = ", if_not_to_be_migrated_N3048)
 
-svi_from_cfg = get_svi_from_cfg()
-candidate_svi_on_N9508 = get_svi_on_device(candidate_vlan_xls_N9508, svi_from_cfg)
+        ################ VLAN CANDIDATE ##############
 
-print("svi_from_cfg = ", svi_from_cfg)
-print("candidate_svi_on_N9508 = ", candidate_svi_on_N9508)
+        candidate_vlan_xls_N9508, candidate_vlan_xls_N3048 = get_vlan_from_xls(INPUT_XLS, SHEET)
+        candidate_vlan_xls_N9508 = list(set(candidate_vlan_xls_N9508) | set(candidate_vlan_xls_N3048))
+        candidate_vlan_xls_N9508.sort(key=natural_keys)
+        vlan_cfg = get_vlan_from_cfg(OSW_CFG_TXT)  # all vlan from CFG, even those NTBM
 
-candidate_svi_not_to_be_migrated_N9508 = get_list_not_to_be_migrated(candidate_svi_on_N9508, svi_from_cfg)
+        print("candidate_vlan_xls_N9508 = ", candidate_vlan_xls_N9508)
+        print("candidate_vlan_xls_N3048 = ", candidate_vlan_xls_N3048)
 
-print("candidate_svi_not_to_be_migrated_N9508 = ", candidate_svi_not_to_be_migrated_N9508)
+        # IF TRUE THEN XLS IS TRUSTABLE AS TRUSTED VLAN SOURCE; Here we test False case
+        if not VLAN_FROM_XLS:
+            vlan_to_add = get_vlan_to_add()
+            candidate_vlan_xls_N9508 += vlan_to_add
+            candidate_vlan_xls_N9508.sort(key=natural_keys)
 
+        candidate_vlan_not_to_be_migrated_N9508 = get_list_not_to_be_migrated(candidate_vlan_xls_N9508, vlan_cfg)
+        candidate_vlan_not_to_be_migrated_N3048 = get_list_not_to_be_migrated(candidate_vlan_xls_N3048, vlan_cfg)
+        print("candidate_vlan_not_to_be_migrated_N9508 = ", candidate_vlan_not_to_be_migrated_N9508)
+        print("candidate_vlan_not_to_be_migrated_N3048 = ", candidate_vlan_not_to_be_migrated_N3048)
 
-################ REAL VLAN  ##############
+        ############## SVI ################
 
+        svi_from_cfg = get_svi_from_cfg(OSW_CFG_TXT)
+        candidate_svi_on_N9508 = get_svi_on_device(candidate_vlan_xls_N9508, svi_from_cfg)
 
-if not VLAN_FROM_XLS:
-    vlan_on_N9508 = list(set(candidate_vlan_xls_N9508) | (set(candidate_vlan_xls_N3048)))
-    vlan_on_N9508.sort(key=natural_keys)
+        print("svi_from_cfg = ", svi_from_cfg)
+        print("candidate_svi_on_N9508 = ", candidate_svi_on_N9508)
 
-else:
-    vlan_on_N9508 = candidate_vlan_xls_N9508
+        candidate_svi_not_to_be_migrated_N9508 = get_list_not_to_be_migrated(candidate_svi_on_N9508, svi_from_cfg)
 
-vlan_on_N3048 = candidate_vlan_xls_N3048
+        print("candidate_svi_not_to_be_migrated_N9508 = ", candidate_svi_not_to_be_migrated_N9508)
 
-print("vlan_on_N9508 = ", vlan_on_N9508)
-print("vlan_on_N3048 = ", vlan_on_N3048)
+        ################ REAL VLAN  ##############
 
-if not VLAN_FROM_XLS:
-    vlan_not_to_be_migrated_N9508 = get_list_not_to_be_migrated(vlan_on_N9508, vlan_cfg)
-else:
-    vlan_not_to_be_migrated_N9508 = candidate_vlan_not_to_be_migrated_N9508
+        if not VLAN_FROM_XLS:
+            vlan_on_N9508 = list(set(candidate_vlan_xls_N9508) | (set(candidate_vlan_xls_N3048)))
+            vlan_on_N9508.sort(key=natural_keys)
+        else:
+            vlan_on_N9508 = candidate_vlan_xls_N9508
 
-vlan_not_to_be_migrated_N3048 = candidate_vlan_not_to_be_migrated_N3048
+        vlan_on_N3048 = candidate_vlan_xls_N3048
 
-print("vlan_not_to_be_migrated_N9508 = ", vlan_not_to_be_migrated_N9508)
-print("vlan_not_to_be_migrated_N3048 = ", vlan_not_to_be_migrated_N3048)
+        print("vlan_on_N9508 = ", vlan_on_N9508)
+        print("vlan_on_N3048 = ", vlan_on_N3048)
 
-################ MAIN IF #############
+        if not VLAN_FROM_XLS:
+            vlan_not_to_be_migrated_N9508 = get_list_not_to_be_migrated(vlan_on_N9508, vlan_cfg)
+        else:
+            vlan_not_to_be_migrated_N9508 = candidate_vlan_not_to_be_migrated_N9508
 
-net_in_area_dict = get_net_in_area()
-svi_to_area_dict = get_svi_to_area(net_in_area_dict)
+        vlan_not_to_be_migrated_N3048 = candidate_vlan_not_to_be_migrated_N3048
 
-svi_on_N9508 = candidate_svi_on_N9508[:]
-svi_on_N9508.sort(key=natural_keys)
+        print("vlan_not_to_be_migrated_N9508 = ", vlan_not_to_be_migrated_N9508)
+        print("vlan_not_to_be_migrated_N3048 = ", vlan_not_to_be_migrated_N3048)
 
-print("svi_on_N9508 = ", svi_on_N9508)
+        ################ MAIN IF #############
 
-svi_not_to_be_migrated_N9508 = get_list_not_to_be_migrated(svi_on_N9508, svi_from_cfg)
+        net_in_area_dict = get_net_in_area(OSW_CFG_TXT)
+        svi_to_area_dict = get_svi_to_area(net_in_area_dict, OSW_CFG_TXT)
 
-migr_dict_N9508 = get_migration_dictionary_N9508()
-cfg_intf_N9508 = get_normalized_if_OSWVCEVSW_cfg(if_not_to_be_migrated_N9508, migr_dict_N9508, qos_sp_def_N9508_dict)
-cfg_vlan_N9508 = get_normalized_vlan_OSWVCEVSW_cfg(vlan_not_to_be_migrated_N9508)
-#cfg_svi_N9508 = get_normalized_svi_OSWVCEVSW_cfg(svi_not_to_be_migrated_N9508, svi_on_N9508)
-cfg_svi_N9508 = get_normalized_svi_OSWVCEVSW_cfg(svi_not_to_be_migrated_N9508)
-cfg_svi_and_ospf_N9508 = add_ospf_to_svi_cfg(cfg_svi_N9508, svi_on_N9508, svi_to_area_dict)
-routes_for_N6500 = get_routes_for_devices(routes, svi_on_N9508)
-routes_for_N9508 = transform_routes_for_nexus(routes_for_N6500)
+        svi_on_N9508 = candidate_svi_on_N9508[:]
+        svi_on_N9508.sort(key=natural_keys)
 
-migr_dict_N3048 = get_migration_dictionary_N3048()
-cfg_intf_N3048 = get_normalized_if_OSWVCEVSW_cfg(if_not_to_be_migrated_N3048, migr_dict_N3048, qos_sp_def_N3048_dict)
-cfg_vlan_N3048 = get_normalized_vlan_OSWVCEVSW_cfg(vlan_not_to_be_migrated_N3048)
+        print("svi_on_N9508 = ", svi_on_N9508)
 
-cfg_N9508 = cfg_vlan_N9508 + cfg_intf_N9508 + cfg_svi_and_ospf_N9508 + routes_for_N9508 + routes_for_N6500
-parse_out_N9508 = c.CiscoConfParse(cfg_N9508)
-parse_out_N9508.save_as(OSWVCE_CFG_TXT)
+        svi_not_to_be_migrated_N9508 = get_list_not_to_be_migrated(svi_on_N9508, svi_from_cfg)
+        device = 'N9508'
+        migr_dict_N9508 = get_migration_dictionary_N9508(INPUT_XLS, SHEET)
+        cfg_intf_N9508 = get_normalized_if_OSWVCEVSW_cfg\
+            (device, if_not_to_be_migrated_N9508, migr_dict_N9508, qos_sp_def_N9508_dict, OSW_CFG_TXT, INPUT_XLS, SHEET)
+        cfg_vlan_N9508 = get_normalized_vlan_OSWVCEVSW_cfg(vlan_not_to_be_migrated_N9508, OSW_CFG_TXT)
+        #cfg_svi_N9508 = get_normalized_svi_OSWVCEVSW_cfg(svi_not_to_be_migrated_N9508, svi_on_N9508)
+        cfg_svi_N9508 = get_normalized_svi_OSWVCEVSW_cfg(svi_not_to_be_migrated_N9508, OSW_CFG_TXT)
+        cfg_svi_and_ospf_N9508 = add_ospf_to_svi_cfg(cfg_svi_N9508, svi_on_N9508, svi_to_area_dict)
+        routes_for_N6500 = get_routes_for_devices(routes, svi_on_N9508)
+        routes_for_N9508 = transform_routes_for_nexus(routes_for_N6500)
 
-cfg_N3048 = cfg_vlan_N3048 + cfg_intf_N3048
-parse_out_N3048 = c.CiscoConfParse(cfg_N3048)
-parse_out_N3048.save_as(OSWVSW_CFG_TXT)
-print("done write")
+        device = 'N3048'
+        migr_dict_N3048 = get_migration_dictionary_N3048(INPUT_XLS, SHEET)
+        cfg_intf_N3048 = get_normalized_if_OSWVCEVSW_cfg\
+            (device, if_not_to_be_migrated_N3048, migr_dict_N3048, qos_sp_def_N3048_dict, OSW_CFG_TXT,INPUT_XLS, SHEET)
+
+        cfg_vlan_N3048 = get_normalized_vlan_OSWVCEVSW_cfg(vlan_not_to_be_migrated_N3048, OSW_CFG_TXT)
+
+        cfg_N9508 = acl + cfg_vlan_N9508 + cfg_intf_N9508 + cfg_svi_and_ospf_N9508 + routes_for_N9508 + routes_for_N6500
+        parse_out_N9508 = c.CiscoConfParse(cfg_N9508)
+        parse_out_N9508.save_as(OSWVCE_CFG_TXT)
+
+        cfg_N3048 = cfg_vlan_N3048 + cfg_intf_N3048
+        parse_out_N3048 = c.CiscoConfParse(cfg_N3048)
+        parse_out_N3048.save_as(OSWVSW_CFG_TXT)
+
+        dest_path = site_config.base_dir + site_config.site + "/FINAL/"
+        copy_file(OSWVSW_CFG_TXT, dest_path + SWITCH + 'VSW' + '.txt', dest_path)
+        copy_file(OSWVCE_CFG_TXT, dest_path + SWITCH + 'VCE' + '.txt', dest_path)
+        print("done write")
+
+    vlans = merge_vsw(dest_path)
+    merge_vce(vlans, dest_path)
+
+if __name__ == "__main__":
+    site_configs = get_site_configs(SITES_CONFIG_FOLDER)
+    copy_folder(site_configs)
+    run(site_configs)
